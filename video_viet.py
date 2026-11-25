@@ -76,7 +76,7 @@ def translate(cues, cache):
     return cues
 
 
-async def dub(ffmpeg, cues, cache, track):
+async def dub(ffmpeg, cues, cache, track, skip_missing_voice=False):
     import edge_tts
 
     cursor = 0
@@ -100,8 +100,13 @@ async def dub(ffmpeg, cues, cache, track):
                     except Exception as exc:
                         temporary.unlink(missing_ok=True)
                         if attempt == 3:
+                            if skip_missing_voice and isinstance(exc, edge_tts.exceptions.NoAudioReceived):
+                                print(f"Dòng {i}: giữ phụ đề và tiếng gốc, thiếu giọng Hoài My.", flush=True)
+                                break
                             raise RuntimeError(f"Hoài My lỗi tại dòng {i}: {exc}") from exc
                         await asyncio.sleep(2 ** (attempt + 1))
+            if not clip.is_file():
+                continue
             pcm = run([ffmpeg, "-v", "error", "-i", str(clip), "-af", "atempo=1.25",
                        "-ar", str(RATE), "-ac", "1", "-f", "s16le", "-"],
                       stdout=subprocess.PIPE).stdout
@@ -113,6 +118,8 @@ async def dub(ffmpeg, cues, cache, track):
             out.writeframesraw(pcm)
             cursor = start + len(pcm) // 2
             print(f"Giọng Hoài My: {i}/{len(cues)}", flush=True)
+        if cursor == 0:
+            out.writeframesraw(bytes(2))
 
 
 def render(ffmpeg, source, work, output, top, bottom, volume):
@@ -141,6 +148,8 @@ def main():
     parser.add_argument("--crop-bottom", type=float, default=12)
     parser.add_argument("--am-goc", type=float, default=15)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--bo-qua-loi-giong", action="store_true",
+                        help="Giữ phụ đề và tiếng gốc khi Edge TTS không trả âm thanh")
     args = parser.parse_args()
     if not (0 <= args.crop_top and 0 <= args.crop_bottom
             and args.crop_top + args.crop_bottom < 90 and 0 <= args.am_goc <= 100):
@@ -181,7 +190,7 @@ def main():
                 cues = translate(cues, cache)
                 source.with_suffix(".hoai-my.vi.srt").write_text(srt.compose(cues), encoding="utf-8")
             (work / "caption.srt").write_text(srt.compose(cues), encoding="utf-8")
-            asyncio.run(dub(ffmpeg, cues, cache, work / "voice.wav"))
+            asyncio.run(dub(ffmpeg, cues, cache, work / "voice.wav", args.bo_qua_loi_giong))
             temporary_output = work / "render.mp4"
             render(ffmpeg, source, work, temporary_output, args.crop_top, args.crop_bottom, args.am_goc)
             if output.exists():
